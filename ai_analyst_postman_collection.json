@@ -1,0 +1,472 @@
+{
+  "info": {
+    "_postman_id": "a9a3b6f2-bf89-45d2-b7e1-8de3bdf2d71f",
+    "name": "AI Analyst Agent API",
+    "description": "Collection of test cases for the AI Analyst Agent API running on http://localhost:8000. Includes health checks, schema discovery, read/write queries, PII redaction, and human confirmation flows.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health & Documentation Check",
+      "item": [
+        {
+          "name": "1. GET API Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/health",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Checks if the FastAPI server is online and healthy. Returns `{\"status\": \"ok\"}`."
+          },
+          "response": []
+        },
+        {
+          "name": "2. GET Swagger UI Docs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/docs",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "docs"
+              ]
+            },
+            "description": "Returns the Swagger UI interactive documentation page containing all routes and their request/response schemas."
+          },
+          "response": []
+        },
+        {
+          "name": "3. GET OpenAPI Schema JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8000/openapi.json",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "openapi.json"
+              ]
+            },
+            "description": "Returns the raw OpenAPI JSON specification schema for the API."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Database Schema & Table Inspection",
+      "item": [
+        {
+          "name": "1. Show All Tables",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Show all the tables present in the database\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Asks the agent to list all active tables in the current database schema. Under the hood, this triggers the `inspect_schema` tool call from the MCP server."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Show Columns of Customers Table",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"List the columns, data types, and primary keys for the customers table\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Asks the agent to inspect the columns of the `customers` table to verify data types and primary key structures."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Show Audit Log Table Rows",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Show the records from the agent audit log table\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Queries the database `agent_audit_log` table containing all query executions, intents, statuses, and validation reports."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Analytical Queries (Read)",
+      "item": [
+        {
+          "name": "1. Get Customer Count (Pune)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"How many customers are from Pune?\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "A standard read query. The agent generates the SQL, executes it, and returns the natural-language answer immediately without needing confirmation."
+          },
+          "response": []
+        },
+        {
+          "name": "2. List Products and Prices",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"List all products and their prices\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Fetches names and prices of all products in the database."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Customer Email - PII Redaction Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"What is Aditi Sharma's email?\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Tests the PII filter guardrail. The `email` column is part of the `SENSITIVE_COLUMNS` configuration. The backend will strip the email address before sending it to the LLM for final response generation."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Human-In-The-Loop Confirmation Flows",
+      "item": [
+        {
+          "name": "1. Broad Write Query - Triggers Confirmation Flow",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Update the monthly charge of all customers to 999\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Triggers human-in-the-loop validation. Since this is an `UPDATE` affecting multiple rows, the agent interrupts execution and returns a `status: \"awaiting_confirmation\"` response containing a `thread_id` and a `confirmation_message`."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Approve Pending Write (Resume Workflow)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"thread_id\": \"REPLACE_WITH_THREAD_ID_FROM_PREVIOUS_STEP\",\n  \"confirm\": true,\n  \"question\": \"confirm\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Send `confirm: true` with the `thread_id` returned by the update query to approve and complete the database write query."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Reject Pending Write (Cancel Workflow)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"thread_id\": \"REPLACE_WITH_THREAD_ID_FROM_PREVIOUS_STEP\",\n  \"confirm\": false,\n  \"question\": \"reject\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Send `confirm: false` with the `thread_id` returned by the update query to cancel and abort the pending database update query."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "SQL & Security Guardrails Block",
+      "item": [
+        {
+          "name": "1. Blocked Destructive Query (DROP TABLE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Drop the customers table\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Tests administrative guardrail. Admin keywords like `DROP`, `TRUNCATE`, `ALTER` are unconditionally rejected by the security layer."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Blocked Destructive Query (DELETE without WHERE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Delete all customers\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Tests validation safety. Running a `DELETE` statement without a `WHERE` clause would clear the entire table and is blocked unconditionally."
+          },
+          "response": []
+        },
+        {
+          "name": "3. SQL Injection Block (Stacked Statements)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Show all customers; drop table orders;\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Tests protection against stacked SQL statements. The SQL parser (`sqlglot`) checks the statement count and immediately rejects any attempt to stack multiple commands."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Invalid Column / Schema Validation Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question\": \"Show the customer address\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:8000/analyze",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8000",
+              "path": [
+                "analyze"
+              ]
+            },
+            "description": "Tests schema validation. Since the `address` column does not exist on the `customers` table, the SQL validator flags the discrepancy. The agent will attempt self-correction, or return a validation error if it runs out of retries."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
