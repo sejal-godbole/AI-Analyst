@@ -9,6 +9,7 @@ from langgraph.types import Command
 
 from app.agent.graph import compiled_graph
 from app.models.schemas import AnalyzeRequest, AnalyzeResponse
+from app.observability.tracer import set_current_trace_id, tracer
 
 router = APIRouter()
 
@@ -17,20 +18,32 @@ router = APIRouter()
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     # --- Resuming a paused (awaiting-confirmation) workflow ---
     if request.thread_id and request.confirm is not None:
+        trace_id = request.trace_id or str(uuid.uuid4())
+        set_current_trace_id(trace_id)
         config = {"configurable": {"thread_id": request.thread_id}}
         final_state = await compiled_graph.ainvoke(Command(resume=request.confirm), config)
-        return _to_response(final_state, request.thread_id)
+        return _to_response(final_state, request.thread_id, trace_id)
 
     # --- Fresh request ---
     thread_id = request.thread_id or str(uuid.uuid4())
+    trace_id = request.trace_id or str(uuid.uuid4())
+    set_current_trace_id(trace_id)
+
+    # Start root trace
+    tracer.start_trace(trace_id=trace_id, user_question=request.question, thread_id=thread_id)
+
     config = {"configurable": {"thread_id": thread_id}}
-    initial_state = {"user_question": request.question}
+    initial_state = {
+        "user_question": request.question,
+        "trace_id": trace_id,
+        "thread_id": thread_id,
+    }
 
     final_state = await compiled_graph.ainvoke(initial_state, config)
-    return _to_response(final_state, thread_id)
+    return _to_response(final_state, thread_id, trace_id)
 
 
-def _to_response(state: dict, thread_id: str) -> AnalyzeResponse:
+def _to_response(state: dict, thread_id: str, trace_id: str) -> AnalyzeResponse:
     # If the graph is paused (interrupted), LangGraph's ainvoke return value
     # contains a special "__interrupt__" key instead of running to completion.
     interrupts = state.get("__interrupt__")
@@ -42,6 +55,7 @@ def _to_response(state: dict, thread_id: str) -> AnalyzeResponse:
             confirmation_message=payload.get("message"),
             sql=payload.get("sql"),
             thread_id=thread_id,
+            trace_id=trace_id,
         )
 
     status = state.get("status", "error")
@@ -51,6 +65,7 @@ def _to_response(state: dict, thread_id: str) -> AnalyzeResponse:
         sql=state.get("validated_sql"),
         requires_confirmation=False,
         thread_id=thread_id,
+        trace_id=trace_id,
         error=state.get("error_message") if status != "success" else None,
         rows_affected=state.get("rows_affected"),
     )

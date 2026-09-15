@@ -17,6 +17,10 @@ class AnalyzeRequest(BaseModel):
         default=None,
         description="If resuming a workflow that requires confirmation: true to proceed, false to cancel.",
     )
+    trace_id: Optional[str] = Field(
+        default=None,
+        description="Optional end-to-end trace correlation ID. Generated automatically if omitted.",
+    )
 
 
 class AnalyzeResponse(BaseModel):
@@ -26,6 +30,7 @@ class AnalyzeResponse(BaseModel):
     requires_confirmation: bool = False
     confirmation_message: Optional[str] = None
     thread_id: Optional[str] = None
+    trace_id: Optional[str] = None
     error: Optional[str] = None
     rows_affected: Optional[int] = None
 

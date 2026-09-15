@@ -16,8 +16,19 @@ import {
   Lock,
   Layers,
   Sun,
-  Moon
+  Moon,
+  Activity,
+  Zap,
+  Cpu,
+  Server,
+  Code2,
+  ExternalLink,
+  ChevronDown,
+  ChevronRight,
+  ShieldCheck,
+  DollarSign
 } from 'lucide-react';
+import ObservabilityDashboard from './components/ObservabilityDashboard';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -31,14 +42,14 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'schema'
+  const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'schema' | 'audit'
   const [healthStatus, setHealthStatus] = useState('offline'); // 'ok' | 'offline'
   const [schemaData, setSchemaData] = useState({ tables: {} });
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
       sender: 'agent',
-      text: 'Hello! I am your AI Database Analyst. I can answer queries, analyze schemas, and run updates under safety guardrails. What would you like to explore today?',
+      text: 'Hello! I am your AI Database Analyst. I can answer queries, analyze schemas, and run updates under safety guardrails with live LangSmith observability. What would you like to explore today?',
       timestamp: new Date().toLocaleTimeString(),
       status: 'success'
     }
@@ -48,31 +59,49 @@ function App() {
   
   // Human-In-The-Loop Confirmation State
   const [pendingConfirmation, setPendingConfirmation] = useState(null); 
-  // e.g., { thread_id, confirmation_message, sql }
 
   // Active query inspector state
   const [selectedMessage, setSelectedMessage] = useState(null);
+  const [activeTraceDetail, setActiveTraceDetail] = useState(null);
+  const [showPromptDetails, setShowPromptDetails] = useState(false);
+
+  // Big Observability Dialog Modal State
+  const [showObservabilityModal, setShowObservabilityModal] = useState(false);
 
   // Audit Logs State
   const [auditLogs, setAuditLogs] = useState([]);
   const [auditLoading, setAuditLoading] = useState(false);
 
   const [threadId, setThreadId] = useState(null);
+  const [activeTraceId, setActiveTraceId] = useState(null);
 
   const messagesEndRef = useRef(null);
 
+  // Close modal on escape key
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setShowObservabilityModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const handleRefresh = () => {
     setThreadId(null);
+    setActiveTraceId(null);
+    setSelectedMessage(null);
+    setActiveTraceDetail(null);
     setMessages([
       {
         id: 'welcome',
         sender: 'agent',
-        text: 'Hello! I am your AI Database Analyst. I can answer queries, analyze schemas, and run updates under safety guardrails. What would you like to explore today?',
+        text: 'Hello! I am your AI Database Analyst. I can answer queries, analyze schemas, and run updates under safety guardrails with live LangSmith observability. What would you like to explore today?',
         timestamp: new Date().toLocaleTimeString(),
         status: 'success'
       }
     ]);
-    setSelectedMessage(null);
     setPendingConfirmation(null);
     fetchStatusAndSchema();
   };
@@ -107,6 +136,16 @@ function App() {
       console.error('Failed to load audit logs:', err);
     } finally {
       setAuditLoading(false);
+    }
+  };
+
+  const fetchTraceDetail = async (traceId) => {
+    if (!traceId) return;
+    try {
+      const res = await axios.get(`${API_BASE}/api/observability/traces/${traceId}`);
+      setActiveTraceDetail(res.data);
+    } catch (err) {
+      console.error('Failed to fetch trace detail for inspector:', err);
     }
   };
 
@@ -148,12 +187,17 @@ function App() {
       if (data.thread_id) {
         setThreadId(data.thread_id);
       }
+      if (data.trace_id) {
+        setActiveTraceId(data.trace_id);
+        fetchTraceDetail(data.trace_id);
+      }
 
       const agentMsgId = `agent-${Date.now()}`;
       
       if (data.status === 'awaiting_confirmation') {
         setPendingConfirmation({
           thread_id: data.thread_id,
+          trace_id: data.trace_id,
           confirmation_message: data.confirmation_message,
           sql: data.sql,
           userMsgId: userMsgId
@@ -167,6 +211,7 @@ function App() {
           status: 'awaiting_confirmation',
           sql: data.sql,
           threadId: data.thread_id,
+          traceId: data.trace_id,
         };
         setMessages(prev => [...prev, agentMsg]);
         setSelectedMessage(agentMsg);
@@ -176,16 +221,17 @@ function App() {
           sender: 'agent',
           text: data.answer || (data.status === 'rejected' ? `Rejected: ${data.error}` : `Error: ${data.error}`),
           timestamp: new Date().toLocaleTimeString(),
-          status: data.status, // 'success' | 'rejected' | 'error'
+          status: data.status,
           sql: data.sql,
           error: data.error,
           threadId: data.thread_id,
+          traceId: data.trace_id,
           rowsAffected: data.rows_affected
         };
         setMessages(prev => [...prev, agentMsg]);
         setSelectedMessage(agentMsg);
         
-        // Refresh schema in case of structural updates (table creation, etc.)
+        // Refresh schema in case of structural updates
         fetchStatusAndSchema();
       }
     } catch (err) {
@@ -207,18 +253,24 @@ function App() {
   const handleConfirm = async (approved) => {
     if (!pendingConfirmation) return;
 
-    const { thread_id, sql } = pendingConfirmation;
+    const { thread_id, trace_id, sql } = pendingConfirmation;
     setPendingConfirmation(null);
     setLoading(true);
 
     try {
       const res = await axios.post(`${API_BASE}/analyze`, {
         thread_id: thread_id,
+        trace_id: trace_id,
         confirm: approved,
         question: approved ? 'confirm' : 'reject'
       });
 
       const data = res.data;
+      if (data.trace_id) {
+        setActiveTraceId(data.trace_id);
+        fetchTraceDetail(data.trace_id);
+      }
+
       const agentMsgId = `agent-${Date.now()}`;
       
       const agentMsg = {
@@ -230,13 +282,13 @@ function App() {
         sql: sql,
         error: data.error,
         threadId: thread_id,
+        traceId: data.trace_id || trace_id,
         rowsAffected: data.rows_affected
       };
 
       setMessages(prev => [...prev, agentMsg]);
       setSelectedMessage(agentMsg);
       
-      // Refresh schema in case database state changed
       fetchStatusAndSchema();
     } catch (err) {
       console.error(err);
@@ -253,7 +305,19 @@ function App() {
     }
   };
 
-  // Query helpers / presets
+  // Select message and sync trace details
+  const handleSelectMessage = (msg) => {
+    if (msg.sender !== 'agent') return;
+    setSelectedMessage(msg);
+    if (msg.traceId) {
+      setActiveTraceId(msg.traceId);
+      fetchTraceDetail(msg.traceId);
+    } else {
+      setActiveTraceDetail(null);
+    }
+  };
+
+  // Query presets
   const presets = [
     { label: 'Inspect Database Tables', q: 'Show all the tables present in the database' },
     { label: 'Describe Customers Table', q: 'List the columns, data types, and primary keys for the customers table' },
@@ -274,7 +338,17 @@ function App() {
           <h1 className="brand-title">AI Analyst Agent</h1>
         </div>
         
-        <div className="brand-section" style={{ gap: '1rem' }}>
+        <div className="brand-section" style={{ gap: '0.75rem' }}>
+          <button 
+            className="neo-button secondary" 
+            style={{ padding: '0.4rem 0.85rem', height: '2.25rem', gap: '0.4rem' }} 
+            onClick={() => setShowObservabilityModal(true)}
+            title="Open Observability & LangSmith Traces Dialog"
+          >
+            <Activity size={14} style={{ color: 'var(--accent-color)' }} />
+            <span>Observability & Traces</span>
+          </button>
+
           <button 
             className="neo-button secondary" 
             style={{ padding: '0.4rem', width: '2.25rem', height: '2.25rem' }} 
@@ -325,9 +399,19 @@ function App() {
                 <Clock size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} />
                 Audit Logs
               </button>
+              <button 
+                className="tab-button"
+                onClick={() => setShowObservabilityModal(true)}
+                style={{ color: 'var(--accent-color)', borderColor: 'rgba(139, 92, 246, 0.25)' }}
+                title="Open Big Observability Traces Dialog"
+              >
+                <Activity size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} />
+                Live Observability ↗
+              </button>
             </div>
           </div>
 
+          {/* Tab 1: Chat Console */}
           {activeTab === 'chat' && (
             <>
               {/* Chat Conversation Scroll Area */}
@@ -336,9 +420,7 @@ function App() {
                   <div 
                     key={msg.id} 
                     className={`chat-bubble ${msg.sender} ${selectedMessage?.id === msg.id ? 'active-inspect' : ''}`}
-                    onClick={() => {
-                      if (msg.sender === 'agent') setSelectedMessage(msg);
-                    }}
+                    onClick={() => handleSelectMessage(msg)}
                     style={{ 
                       cursor: msg.sender === 'agent' ? 'pointer' : 'default',
                       borderWidth: selectedMessage?.id === msg.id ? '3px' : '2px' 
@@ -348,210 +430,239 @@ function App() {
                       <span>{msg.sender === 'user' ? 'YOU' : 'AI ANALYST'}</span>
                       <span>{msg.timestamp}</span>
                     </div>
-                    <div>{msg.text}</div>
                     
-                    {msg.status === 'awaiting_confirmation' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--warning-text)', fontWeight: 700, fontSize: '0.75rem', marginTop: '0.5rem' }}>
-                        <AlertTriangle size={14} /> Paused: Awaiting confirmation
-                      </div>
-                    )}
-                    {msg.status === 'rejected' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger-text)', fontWeight: 700, fontSize: '0.75rem', marginTop: '0.5rem' }}>
-                        <ShieldAlert size={14} /> Security Blocked
-                      </div>
-                    )}
+                    <div style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5' }}>
+                      {msg.text}
+                    </div>
                   </div>
                 ))}
 
-                {/* Spinning loader inside console */}
                 {loading && (
-                  <div className="chat-bubble agent" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', alignSelf: 'flex-start' }}>
-                    <RefreshCw className="spinner" size={16} />
-                    <span>Analyzing schema and executing query plan...</span>
+                  <div className="chat-bubble agent" style={{ borderStyle: 'dashed' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <div className="status-dot active"></div>
+                      <span>Tracing LangGraph nodes & evaluating guardrails...</span>
+                    </div>
                   </div>
                 )}
 
-                {/* Human-In-The-Loop Confirmation overlay box */}
+                {/* Human-In-The-Loop Confirmation Box */}
                 {pendingConfirmation && (
-                  <div className="confirm-card">
-                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1rem', color: 'var(--warning-text)' }}>
-                      <AlertTriangle size={18} /> Risky Write Action Requires Authorization
-                    </h3>
+                  <div className="neo-box" style={{ borderColor: 'var(--warning-border)', backgroundColor: 'var(--warning-bg)', margin: '1rem 0' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--warning-text)', fontWeight: 700 }}>
+                      <AlertTriangle size={18} />
+                      <span>HUMAN AUTHORIZATION REQUIRED</span>
+                    </div>
+
                     <p style={{ marginTop: '0.5rem', fontSize: '0.875rem' }}>
                       {pendingConfirmation.confirmation_message}
                     </p>
-                    <div className="code-block" style={{ color: 'var(--text-primary)' }}>
+
+                    <div className="code-block" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
                       {pendingConfirmation.sql}
                     </div>
-                    
-                    <div className="confirm-card-buttons">
-                      <button className="confirm-button" onClick={() => handleConfirm(true)}>
-                        <Check size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} /> Approve & Run
+
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                      <button 
+                        className="neo-button" 
+                        style={{ backgroundColor: 'var(--success-bg)', color: 'var(--success-text)', borderColor: 'var(--success-border)' }}
+                        onClick={() => handleConfirm(true)}
+                      >
+                        <Check size={14} /> APPROVE & EXECUTE
                       </button>
-                      <button className="reject-button" onClick={() => handleConfirm(false)}>
-                        <X size={14} style={{ verticalAlign: 'middle', marginRight: '0.25rem' }} /> Reject & Abort
+                      <button 
+                        className="neo-button" 
+                        style={{ backgroundColor: 'var(--danger-bg)', color: 'var(--danger-text)', borderColor: 'var(--danger-border)' }}
+                        onClick={() => handleConfirm(false)}
+                      >
+                        <X size={14} /> REJECT
                       </button>
                     </div>
                   </div>
                 )}
-                
+
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Preset suggestion helpers */}
-              <div style={{ padding: '0 2rem' }}>
-                <h4 style={{ fontSize: '0.75rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Pre-configured Test Scenarios</h4>
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                  {presets.map((preset, idx) => (
-                    <button 
+              {/* Natural Language Prompt Input */}
+              <div className="chat-input-area">
+                {/* Fast Presets */}
+                <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+                  {presets.map((p, idx) => (
+                    <button
                       key={idx}
                       className="neo-button secondary"
-                      style={{ fontSize: '0.7rem', padding: '0.35rem 0.6rem', textTransform: 'none', letterSpacing: 'normal' }}
-                      onClick={() => handleSubmitQuestion(preset.q)}
-                      disabled={loading || !!pendingConfirmation}
+                      style={{ fontSize: '0.7rem', padding: '0.25rem 0.5rem', whiteSpace: 'nowrap' }}
+                      onClick={() => handleSubmitQuestion(p.q)}
+                      disabled={loading}
                     >
-                      {preset.label}
+                      {p.label}
                     </button>
                   ))}
                 </div>
-              </div>
 
-              {/* Chat Form Entry */}
-              <div className="chat-input-wrapper">
-                <input 
-                  type="text" 
-                  className="neo-input" 
-                  placeholder={pendingConfirmation ? "Provide confirmation input above..." : "Ask the AI Database Analyst a question..."}
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSubmitQuestion()}
-                  disabled={loading || !!pendingConfirmation}
-                />
-                <button 
-                  className="neo-button"
-                  onClick={() => handleSubmitQuestion()}
-                  disabled={loading || !!pendingConfirmation}
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSubmitQuestion();
+                  }}
+                  style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}
                 >
-                  <Send size={16} />
-                </button>
+                  <input
+                    type="text"
+                    className="neo-input"
+                    placeholder="Ask a question about customers, orders, or request database updates..."
+                    value={question}
+                    onChange={(e) => setQuestion(e.target.value)}
+                    disabled={loading}
+                    style={{ flex: 1 }}
+                  />
+                  <button type="submit" className="neo-button primary" disabled={loading || !question.trim()}>
+                    <Send size={16} />
+                  </button>
+                </form>
               </div>
             </>
           )}
 
+          {/* Tab 2: Database Schema */}
           {activeTab === 'schema' && (
-            <div style={{ padding: '2rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <h2>Active Database Schema</h2>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                  {Object.keys(schemaData.tables).length} TABLES INSPECTED
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0 2rem 2rem 2rem' }}>
+              <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Database Schema Metadata</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                    Live discovered schema using the raw MCP <code>inspect_schema</code> tool.
+                  </p>
                 </div>
+                <button className="neo-button secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }} onClick={fetchStatusAndSchema}>
+                  <RefreshCw size={12} /> Sync Schema
+                </button>
               </div>
-              
-              <div className="schema-grid">
-                {Object.entries(schemaData.tables).map(([tableName, table]) => (
-                  <div key={tableName} className="schema-card neo-box" style={{ margin: 0 }}>
-                    <div className="schema-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span>{tableName}</span>
-                      <Layers size={12} />
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+                {Object.entries(schemaData.tables || {}).map(([tableName, tableInfo]) => (
+                  <div key={tableName} className="neo-box" style={{ padding: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.5rem' }}>
+                      <Database size={16} style={{ color: 'var(--accent-color)' }} />
+                      <strong style={{ fontSize: '0.9rem' }}>{tableName}</strong>
                     </div>
-                    <ul className="schema-columns">
-                      {Object.entries(table.columns).map(([colName, colType]) => {
-                        const isPK = table.primary_keys.includes(colName);
-                        const isFK = table.foreign_keys.some(fk => fk.column === colName);
-                        return (
-                          <li key={colName} className="schema-column-item">
-                            <span style={{ fontWeight: (isPK || isFK) ? 'bold' : 'normal' }}>
-                              {colName} {isPK && '🔑'} {isFK && '🔗'}
-                            </span>
-                            <span className="type">{colType}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
+
+                    <div style={{ fontSize: '0.75rem' }}>
+                      <p style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Columns:</p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        {Object.entries(tableInfo.columns || {}).map(([colName, colType]) => {
+                          const isPk = tableInfo.primary_keys?.includes(colName);
+                          return (
+                            <div key={colName} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'monospace', color: isPk ? 'var(--accent-color)' : 'inherit' }}>
+                              <span>{colName} {isPk && '(PK)'}</span>
+                              <span style={{ color: 'var(--text-secondary)' }}>{colType}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {tableInfo.foreign_keys && tableInfo.foreign_keys.length > 0 && (
+                        <div style={{ marginTop: '0.75rem', borderTop: '1px dashed var(--border-color)', paddingTop: '0.5rem' }}>
+                          <p style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>Foreign Keys:</p>
+                          {tableInfo.foreign_keys.map((fk, idx) => (
+                            <div key={idx} style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                              {fk.column} → {fk.references_table}.{fk.references_column}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
+          {/* Tab 3: Audit Logs */}
           {activeTab === 'audit' && (
-            <div style={{ padding: '2rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <h2>System Audit Logs</h2>
-                <button className="neo-button secondary" onClick={fetchAuditLogs} disabled={auditLoading}>
-                  <RefreshCw className={auditLoading ? "spinner" : ""} size={14} /> Refresh Logs
+            <div style={{ flex: 1, overflowY: 'auto', padding: '0 2rem 2rem 2rem' }}>
+              <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Agent Audit Logs</h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                    Immutable log of all user questions, generated SQL, guardrail validations, and execution results.
+                  </p>
+                </div>
+                <button className="neo-button secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }} onClick={fetchAuditLogs}>
+                  <RefreshCw size={12} className={auditLoading ? 'spinning' : ''} /> Refresh Logs
                 </button>
               </div>
 
-              {auditLoading ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '2rem' }}>
-                  <RefreshCw className="spinner" size={16} />
-                  <span>Loading audit logs...</span>
-                </div>
-              ) : auditLogs.length === 0 ? (
+              {auditLogs.length === 0 ? (
                 <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                  <Clock size={32} style={{ margin: '0 auto 1rem auto', display: 'block' }} />
-                  No audit log entries found. Run some queries in the Chat Console to generate logs.
+                  No audit logs found yet. Execute queries to see their trace.
                 </div>
               ) : (
-                <div className="audit-log-list" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxHeight: '75vh', overflowY: 'auto', paddingRight: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                   {auditLogs.map((log) => (
-                    <div key={log.audit_id} className="neo-box" style={{ margin: 0, padding: '1.5rem' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '2px solid var(--border-color)', paddingBottom: '0.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <span style={{ fontWeight: 800, fontSize: '0.9rem' }}>LOG #{log.audit_id}</span>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                            {new Date(log.created_at).toLocaleString()}
+                    <div key={log.audit_id} className="neo-box" style={{ padding: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.5rem', fontSize: '0.75rem' }}>
+                        <div>
+                          <strong style={{ color: 'var(--accent-color)' }}>#{log.audit_id}</strong>
+                          <span style={{ marginLeft: '0.5rem', color: 'var(--text-secondary)' }}>
+                            {log.created_at ? new Date(log.created_at).toLocaleTimeString() : ''}
                           </span>
                         </div>
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                           <span className="status-badge" style={{ 
                             backgroundColor: log.validation_status === 'valid' ? 'var(--success-bg)' : 'var(--danger-bg)',
                             color: log.validation_status === 'valid' ? 'var(--success-text)' : 'var(--danger-text)',
-                            border: `2px solid ${log.validation_status === 'valid' ? 'var(--success-border)' : 'var(--danger-border)'}`,
-                            padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.65rem'
+                            border: `1px solid ${log.validation_status === 'valid' ? 'var(--success-border)' : 'var(--danger-border)'}`,
+                            padding: '0.1rem 0.4rem',
+                            fontSize: '0.65rem'
                           }}>
-                            VAL: {log.validation_status ? log.validation_status.toUpperCase() : 'N/A'}
+                            {log.validation_status ? log.validation_status.toUpperCase() : 'N/A'}
                           </span>
                           <span className="status-badge" style={{ 
                             backgroundColor: log.execution_status === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
                             color: log.execution_status === 'success' ? 'var(--success-text)' : 'var(--danger-text)',
-                            border: `2px solid ${log.execution_status === 'success' ? 'var(--success-border)' : 'var(--danger-border)'}`,
-                            padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.65rem'
+                            border: `1px solid ${log.execution_status === 'success' ? 'var(--success-border)' : 'var(--danger-border)'}`,
+                            padding: '0.1rem 0.4rem',
+                            fontSize: '0.65rem'
                           }}>
-                            EXEC: {log.execution_status ? log.execution_status.toUpperCase() : 'N/A'}
+                            {log.execution_status ? log.execution_status.toUpperCase() : 'N/A'}
                           </span>
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <div>
-                          <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>USER QUESTION</strong>
-                          <p style={{ fontSize: '0.9rem', marginTop: '0.1rem' }}>{log.user_question}</p>
+                          <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>QUESTION: </strong>
+                          <span style={{ fontSize: '0.85rem' }}>{log.user_question}</span>
                         </div>
 
                         {log.generated_sql && (
                           <div>
-                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>GENERATED SQL</strong>
-                            <div className="code-block" style={{ marginTop: '0.25rem', fontSize: '0.75rem', padding: '0.5rem' }}>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>SQL:</strong>
+                            <div className="code-block" style={{ fontSize: '0.75rem', padding: '0.5rem', marginTop: '0.25rem' }}>
                               {log.generated_sql}
                             </div>
                           </div>
                         )}
 
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '1rem', marginTop: '0.25rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.5rem', backgroundColor: 'rgba(0,0,0,0.02)', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', marginTop: '0.25rem' }}>
                           <div>
-                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>RETRIES</strong>
-                            <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>{log.retry_count}</p>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>INTENT</strong>
+                            <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>{log.intent || 'N/A'}</p>
                           </div>
                           <div>
-                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ROWS AFFECTED</strong>
-                            <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>{log.rows_affected !== null ? log.rows_affected : 'N/A'}</p>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ROWS</strong>
+                            <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>{log.rows_affected !== null ? log.rows_affected : '0'}</p>
+                          </div>
+                          <div>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>RETRIES</strong>
+                            <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>{log.retry_count || 0}</p>
                           </div>
                           {log.confirmation_status && (
                             <div>
                               <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>CONFIRMATION</strong>
-                              <p style={{ fontSize: '0.9rem', fontWeight: 600, color: log.confirmation_status === 'approved' ? 'var(--success-text)' : 'var(--warning-text)' }}>
+                              <p style={{ fontSize: '0.8rem', fontWeight: 600, color: log.confirmation_status === 'approved' ? 'var(--success-text)' : 'var(--warning-text)' }}>
                                 {log.confirmation_status.toUpperCase()}
                               </p>
                             </div>
@@ -560,8 +671,8 @@ function App() {
 
                         {log.result_summary && (
                           <div>
-                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>RESULT SUMMARY</strong>
-                            <p style={{ fontSize: '0.8rem', fontFamily: 'monospace', backgroundColor: 'rgba(0,0,0,0.03)', padding: '0.4rem', border: '1px solid var(--border-color)', marginTop: '0.1rem' }}>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>RESULT SUMMARY:</strong>
+                            <p style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-secondary)', backgroundColor: 'var(--bg-code)', padding: '0.4rem', borderRadius: '4px', border: '1px solid var(--border-color)', marginTop: '0.1rem' }}>
                               {log.result_summary}
                             </p>
                           </div>
@@ -569,7 +680,7 @@ function App() {
 
                         {log.error && (
                           <div>
-                            <strong style={{ fontSize: '0.75rem', color: 'var(--danger-text)' }}>ERROR</strong>
+                            <strong style={{ fontSize: '0.75rem', color: 'var(--danger-text)' }}>ERROR:</strong>
                             <p className="code-block" style={{ backgroundColor: 'var(--danger-bg)', borderColor: 'var(--danger-border)', color: 'var(--danger-text)', fontSize: '0.75rem', padding: '0.5rem', marginTop: '0.1rem' }}>
                               {log.error}
                             </p>
@@ -597,6 +708,15 @@ function App() {
 
           {selectedMessage ? (
             <div className="neo-box" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minHeight: '400px' }}>
+              {/* Button to Trace Observability in Big Dialog Box */}
+              <button 
+                className="neo-button primary" 
+                style={{ width: '100%', padding: '0.65rem', gap: '0.5rem', fontWeight: 700, fontSize: '0.82rem' }}
+                onClick={() => setShowObservabilityModal(true)}
+              >
+                <Activity size={16} /> Trace Observability
+              </button>
+
               <div>
                 <h4 style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>EXECUTION STATUS</h4>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
@@ -669,13 +789,27 @@ function App() {
               )}
             </div>
           ) : (
-            <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              <Terminal size={32} style={{ margin: '0 auto 1rem auto', display: 'block' }} />
-              No active inspection telemetry. Select any agent message inside the chat console to analyze.
+            <div style={{ border: '2px dashed var(--border-color)', borderRadius: '8px', padding: '3rem 1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <Terminal size={32} style={{ margin: '0 auto 1rem auto', display: 'block', color: 'var(--accent-color)' }} />
+              <p style={{ fontSize: '0.85rem' }}>
+                No active inspection telemetry. Select any agent message inside the chat console to analyze.
+              </p>
             </div>
           )}
         </section>
       </main>
+
+      {/* Big Observability Modal Dialog Box */}
+      {showObservabilityModal && (
+        <div className="obs-dialog-backdrop" onClick={() => setShowObservabilityModal(false)}>
+          <div className="obs-dialog-container" onClick={(e) => e.stopPropagation()}>
+            <ObservabilityDashboard 
+              currentTraceId={activeTraceId || selectedMessage?.traceId} 
+              onClose={() => setShowObservabilityModal(false)} 
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

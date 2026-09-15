@@ -1,14 +1,17 @@
 """
-LangGraph node functions.
+LangGraph node functions with full-stack observability instrumentation.
 
 Each node takes the current AgentState and returns a partial-state dict to
-merge in. LLM calls happen only in classify_intent / generate_sql /
-final_answer. Every other node is deterministic Python.
+merge in. LLM calls happen in classify_intent / generate_sql / final_answer.
+All nodes record spans, latencies, guardrail decisions, and errors with the
+Observability Tracer.
 """
 from __future__ import annotations
 
 import logging
 import re
+import uuid
+from typing import Optional
 
 from langgraph.types import interrupt
 
@@ -25,6 +28,8 @@ from app.agent.state import AgentState
 from app.config import get_settings
 from app.logging.audit import write_audit_log
 from app.mcp import client as mcp_client
+from app.observability.schema_tracker import schema_tracker
+from app.observability.tracer import get_current_trace_id, set_current_trace_id, tracer
 from app.security.guardrails import evaluate_guardrails
 from app.security.pii_filter import filter_sensitive_columns
 from app.security.sql_validator import validate_sql
@@ -39,13 +44,47 @@ def _strip_sql_fences(text: str) -> str:
     return _SQL_FENCE_RE.sub("", text).strip()
 
 
+def _safe_chat(
+    system: str,
+    user: str,
+    temperature: float = 0.0,
+    node_name: str = "llm_call",
+    trace_id: Optional[str] = None,
+) -> str:
+    """Invokes chat() handling monkeypatched signatures in test suites gracefully."""
+    try:
+        return chat(system, user, temperature=temperature, node_name=node_name, trace_id=trace_id)
+    except TypeError:
+        try:
+            return chat(system, user, temperature=temperature)
+        except TypeError:
+            return chat(system, user)
+
+
 # ---------------------------------------------------------------------------
-# Node 1
+# Node 1 — receive_question
 # ---------------------------------------------------------------------------
 async def receive_question(state: AgentState) -> dict:
     settings = get_settings()
-    logger.info("Question received: %s", state["user_question"])
+    trace_id = state.get("trace_id") or get_current_trace_id() or str(uuid.uuid4())
+    set_current_trace_id(trace_id)
+
+    span = tracer.start_span(
+        node_name="receive_question",
+        span_type="node",
+        input_data={"user_question": state["user_question"]},
+        trace_id=trace_id,
+    )
+    logger.info("Question received (trace_id=%s): %s", trace_id, state["user_question"])
+
+    tracer.end_span(
+        span.span_id,
+        output_data={"status": "initialized", "max_retries": settings.max_retries},
+        status="completed",
+    )
+
     return {
+        "trace_id": trace_id,
         "retry_count": 0,
         "max_retries": settings.max_retries,
         "query_history": [],
@@ -56,18 +95,36 @@ async def receive_question(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node 2
+# Node 2 — inspect_schema
 # ---------------------------------------------------------------------------
 async def inspect_schema_node(state: AgentState) -> dict:
-    schema = await mcp_client.call_inspect_schema()
-    logger.info("Schema inspected: %d tables", len(schema.get("tables", {})))
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("inspect_schema", "node", trace_id=trace_id)
+
+    schema = await mcp_client.call_inspect_schema(trace_id=trace_id)
+    table_count = len(schema.get("tables", {}))
+    logger.info("Schema inspected: %d tables", table_count)
+
+    # Track schema snapshot and diffs
+    is_changed, change_rec = schema_tracker.record_and_diff(schema)
+    if is_changed:
+        logger.info("Database schema change detected: %s", change_rec.diff_summary if change_rec else "")
+
+    tracer.end_span(
+        span.span_id,
+        output_data={"table_count": table_count, "schema_changed": is_changed},
+        status="completed",
+    )
     return {"schema": schema}
 
 
 # ---------------------------------------------------------------------------
-# Node 3
+# Node 3 — build_schema_context
 # ---------------------------------------------------------------------------
 async def build_schema_context(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("build_schema_context", "node", trace_id=trace_id)
+
     schema = state["schema"]
     lines: list[str] = []
     relationships: list[str] = []
@@ -89,52 +146,104 @@ async def build_schema_context(state: AgentState) -> dict:
     if relationships:
         context += "\n\nRELATIONSHIPS:\n" + "\n".join(relationships)
 
+    tracer.end_span(
+        span.span_id,
+        output_data={"tables_formatted": len(schema.get("tables", {}))},
+        status="completed",
+    )
     return {"schema_context": context}
 
 
 # ---------------------------------------------------------------------------
-# Node 4
+# Node 4 — classify_intent
 # ---------------------------------------------------------------------------
 async def classify_intent(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("classify_intent", "node", trace_id=trace_id)
+
     chat_history = state.get("chat_history", [])
     prompt = build_intent_classification_prompt(state["user_question"], chat_history)
-    raw = chat(INTENT_CLASSIFICATION_SYSTEM, prompt).strip().upper()
+    raw = _safe_chat(
+        INTENT_CLASSIFICATION_SYSTEM,
+        prompt,
+        node_name="classify_intent",
+        trace_id=trace_id,
+    ).strip().upper()
+
     intent = raw if raw in _VALID_INTENTS else "UNKNOWN"
     logger.info("Classified intent: %s (raw=%r)", intent, raw)
+
     if intent == "DESTRUCTIVE":
+        err = "Destructive administrative statements (DROP/TRUNCATE/ALTER/GRANT/REVOKE) are never allowed."
+        tracer.record_guardrail_decision(
+            decision="BLOCKED",
+            rule_name="Destructive Statement Guardrail",
+            reason=err,
+            trace_id=trace_id,
+        )
+        tracer.end_span(span.span_id, output_data={"intent": intent}, status="blocked", error=err)
         return {
             "intent": intent,
-            "error_message": "Destructive administrative statements (DROP/TRUNCATE/ALTER/GRANT/REVOKE) are never allowed.",
+            "error_message": err,
             "status": "rejected",
         }
+
     if intent == "UNKNOWN":
+        err = "I am a database assistant and can only answer questions related to the provided database schema."
+        tracer.record_guardrail_decision(
+            decision="BLOCKED",
+            rule_name="Out of Scope Guardrail",
+            reason=err,
+            trace_id=trace_id,
+        )
+        tracer.end_span(span.span_id, output_data={"intent": intent}, status="blocked", error=err)
         return {
             "intent": intent,
-            "error_message": "I am a database assistant and can only answer questions related to the provided database schema.",
+            "error_message": err,
             "status": "rejected",
         }
+
+    tracer.end_span(span.span_id, output_data={"intent": intent}, status="completed")
     return {"intent": intent}
 
 
 # ---------------------------------------------------------------------------
-# Node 5
+# Node 5 — generate_sql
 # ---------------------------------------------------------------------------
 async def generate_sql(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("generate_sql", "node", trace_id=trace_id)
+
     history = state.get("query_history", [])
     chat_history = state.get("chat_history", [])
     prompt = build_sql_generation_prompt(
         state["user_question"], state["schema_context"], history, chat_history
     )
-    raw_sql = chat(SQL_GENERATION_SYSTEM, prompt, temperature=0.0)
+    raw_sql = _safe_chat(
+        SQL_GENERATION_SYSTEM,
+        prompt,
+        temperature=0.0,
+        node_name="generate_sql",
+        trace_id=trace_id,
+    )
     sql = _strip_sql_fences(raw_sql)
     logger.info("Generated SQL (attempt %d): %s", state.get("retry_count", 0) + 1, sql)
-    return {"generated_sql": sql}
+
+    tracer.end_span(
+        span.span_id,
+        output_data={"raw_sql": raw_sql, "generated_sql": sql, "attempt": state.get("retry_count", 0) + 1},
+        status="completed",
+    )
+    return {"raw_sql": raw_sql, "generated_sql": sql}
 
 
 # ---------------------------------------------------------------------------
 # Node 6 — validate_sql
 # ---------------------------------------------------------------------------
 async def validate_sql_node(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("validate_sql", "node", trace_id=trace_id)
+
     result = validate_sql(state["generated_sql"], state["schema"])
     history = list(state.get("query_history", []))
     attempt_no = len(history) + 1
@@ -143,6 +252,13 @@ async def validate_sql_node(state: AgentState) -> dict:
         error_text = "; ".join(result.errors)
         history.append({"attempt": attempt_no, "sql": state["generated_sql"], "error": error_text})
         logger.warning("SQL validation failed (attempt %d): %s", attempt_no, error_text)
+
+        tracer.end_span(
+            span.span_id,
+            output_data={"valid": False, "errors": result.errors},
+            status="retried" if state.get("retry_count", 0) < state.get("max_retries", 3) else "failed",
+            error=error_text,
+        )
         return {
             "validation_errors": result.errors,
             "validated_sql": None,
@@ -151,6 +267,11 @@ async def validate_sql_node(state: AgentState) -> dict:
         }
 
     logger.info("SQL validation passed (attempt %d).", attempt_no)
+    tracer.end_span(
+        span.span_id,
+        output_data={"valid": True, "operation": result.operation, "sql": state["generated_sql"]},
+        status="completed",
+    )
     return {
         "validation_errors": [],
         "validated_sql": state["generated_sql"],
@@ -162,11 +283,14 @@ async def validate_sql_node(state: AgentState) -> dict:
 # Node 7 — safety_check
 # ---------------------------------------------------------------------------
 async def safety_check(state: AgentState) -> dict:
-    result = validate_sql(state["validated_sql"], state["schema"])
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("safety_check", "node", trace_id=trace_id)
 
+    result = validate_sql(state["validated_sql"], state["schema"])
     estimated_rows = None
+
     if result.operation in ("UPDATE", "DELETE"):
-        preview = await mcp_client.call_preview_query(state["validated_sql"])
+        preview = await mcp_client.call_preview_query(state["validated_sql"], trace_id=trace_id)
         if preview.get("ok"):
             estimated_rows = preview.get("estimated_rows")
 
@@ -174,6 +298,20 @@ async def safety_check(state: AgentState) -> dict:
 
     if not decision.allowed:
         logger.warning("Guardrails rejected SQL: %s", decision.reason)
+        tracer.record_guardrail_decision(
+            decision="BLOCKED",
+            rule_name="Unsafe Query Guardrail",
+            reason=decision.reason,
+            sql=state["validated_sql"],
+            estimated_rows=estimated_rows,
+            trace_id=trace_id,
+        )
+        tracer.end_span(
+            span.span_id,
+            output_data={"decision": "BLOCKED", "reason": decision.reason},
+            status="blocked",
+            error=decision.reason,
+        )
         return {
             "safety_status": "unsafe",
             "error_message": decision.reason,
@@ -186,12 +324,37 @@ async def safety_check(state: AgentState) -> dict:
             f"This operation will run:\n\n{state['validated_sql']}\n\n"
             f"Estimated impact{row_note}. Do you want to continue?"
         )
+        tracer.record_guardrail_decision(
+            decision="CONFIRMATION_REQUIRED",
+            rule_name="Write Confirmation Guardrail",
+            reason=decision.reason or "Modifying statement requires human authorization.",
+            sql=state["validated_sql"],
+            estimated_rows=estimated_rows,
+            trace_id=trace_id,
+        )
+        tracer.end_span(
+            span.span_id,
+            output_data={"decision": "CONFIRMATION_REQUIRED", "estimated_rows": estimated_rows},
+            status="needs_confirmation",
+        )
         return {
             "safety_status": "needs_confirmation",
             "requires_confirmation": True,
             "confirmation_message": message,
         }
 
+    tracer.record_guardrail_decision(
+        decision="ALLOWED",
+        rule_name="Safety Checks Passed",
+        reason="Query meets all safety constraints and policies.",
+        sql=state["validated_sql"],
+        trace_id=trace_id,
+    )
+    tracer.end_span(
+        span.span_id,
+        output_data={"decision": "ALLOWED", "operation": result.operation},
+        status="completed",
+    )
     return {"safety_status": "safe", "requires_confirmation": False}
 
 
@@ -199,26 +362,48 @@ async def safety_check(state: AgentState) -> dict:
 # Node 7b — human_confirmation (uses LangGraph interrupt)
 # ---------------------------------------------------------------------------
 async def human_confirmation(state: AgentState) -> dict:
-    """
-    Pauses the graph using LangGraph's interrupt() mechanism. The FastAPI
-    layer surfaces `confirmation_message` to the user and resumes the graph
-    via Command(resume=...) once the user responds.
-    """
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("human_confirmation", "node", trace_id=trace_id)
+
     approved = interrupt(
         {
             "message": state["confirmation_message"],
             "sql": state["validated_sql"],
+            "trace_id": trace_id,
         }
     )
-    return {"confirmation_approved": bool(approved)}
+    user_decision_str = "approved" if approved else "rejected"
+    tracer.record_guardrail_decision(
+        decision="CONFIRMATION_RESOLVED",
+        rule_name="Human In The Loop",
+        reason=f"User {user_decision_str} execution.",
+        sql=state["validated_sql"],
+        user_decision=user_decision_str,
+        trace_id=trace_id,
+    )
+    tracer.end_span(
+        span.span_id,
+        output_data={"approved": bool(approved)},
+        status="completed" if approved else "blocked",
+    )
+    return {
+        "confirmation_approved": bool(approved),
+        "status": "success" if approved else "rejected",
+        "error_message": None if approved else "Execution rejected by human operator.",
+    }
 
 
 # ---------------------------------------------------------------------------
 # Node 8 — execute_query
 # ---------------------------------------------------------------------------
 async def execute_query_node(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("execute_query", "node", trace_id=trace_id)
+
     settings = get_settings()
-    result = await mcp_client.call_execute_query(state["validated_sql"], settings.max_rows)
+    result = await mcp_client.call_execute_query(
+        state["validated_sql"], settings.max_rows, trace_id=trace_id
+    )
 
     if not result.get("ok"):
         history = list(state.get("query_history", []))
@@ -227,6 +412,12 @@ async def execute_query_node(state: AgentState) -> dict:
             {"attempt": attempt_no, "sql": state["validated_sql"], "error": result.get("error")}
         )
         logger.warning("Execution failed (attempt %d): %s", attempt_no, result.get("error"))
+        tracer.end_span(
+            span.span_id,
+            output_data={"ok": False, "error": result.get("error")},
+            status="retried" if state.get("retry_count", 0) < state.get("max_retries", 3) else "failed",
+            error=result.get("error"),
+        )
         return {
             "execution_result": result,
             "error_message": result.get("error"),
@@ -237,6 +428,11 @@ async def execute_query_node(state: AgentState) -> dict:
         "Execution succeeded: operation=%s row_count=%s",
         result.get("operation"),
         result.get("row_count"),
+    )
+    tracer.end_span(
+        span.span_id,
+        output_data={"ok": True, "operation": result.get("operation"), "row_count": result.get("row_count")},
+        status="completed",
     )
     return {
         "execution_result": result,
@@ -249,34 +445,38 @@ async def execute_query_node(state: AgentState) -> dict:
 # Node 9 — check_result
 # ---------------------------------------------------------------------------
 async def check_result(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("check_result", "node", trace_id=trace_id)
+
     result = state.get("execution_result") or {}
 
     if not result.get("ok"):
+        tracer.end_span(span.span_id, output_data={"ok": False}, status="failed", error=result.get("error"))
         return {"result_validation": {"ok": False, "reason": result.get("error")}}
 
     operation = result.get("operation")
     row_count = result.get("row_count", 0)
 
     if operation == "SELECT" and row_count == 0:
-        # Empty result is not an error — it can be a correct answer
-        # ("no customers matched") — but flag it so final_answer phrases it clearly.
+        tracer.end_span(span.span_id, output_data={"ok": True, "empty": True}, status="completed")
         return {"result_validation": {"ok": True, "reason": "empty_result_set"}}
 
     if operation in ("UPDATE", "DELETE") and row_count == 0:
+        reason = "Statement executed but affected 0 rows — the WHERE clause may not match any data."
+        tracer.end_span(span.span_id, output_data={"ok": False}, status="retried", error=reason)
         return {
             "result_validation": {
                 "ok": False,
-                "reason": "Statement executed but affected 0 rows — the WHERE clause may not match any data.",
+                "reason": reason,
             }
         }
 
+    tracer.end_span(span.span_id, output_data={"ok": True, "rows": row_count}, status="completed")
     return {"result_validation": {"ok": True, "reason": None}}
 
 
 def clean_markdown(text: str) -> str:
-    # Remove bold/italic markers
     text = re.sub(r"\*\*+", "", text)
-    # Convert list bullets to clean plain list markers
     lines = []
     for line in text.split("\n"):
         stripped = line.strip()
@@ -291,6 +491,9 @@ def clean_markdown(text: str) -> str:
 # Node 10 — final_answer
 # ---------------------------------------------------------------------------
 async def final_answer_node(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id() or str(uuid.uuid4())
+    span = tracer.start_span("final_answer", "node", trace_id=trace_id)
+
     result = state.get("execution_result") or {}
     operation = result.get("operation")
 
@@ -298,16 +501,18 @@ async def final_answer_node(state: AgentState) -> dict:
         rows, redacted = filter_sensitive_columns(result.get("rows", []))
         if redacted:
             logger.info("Redacted sensitive columns from LLM-facing result: %s", redacted)
-        summary = f"{len(rows)} row(s):\n{rows[:20]}"  # cap what's shown to the LLM
+        summary = f"{len(rows)} row(s):\n{rows[:20]}"
         if redacted:
             summary += f"\nNote: The following sensitive columns were redacted for security: {', '.join(redacted)}."
     else:
         summary = f"{operation} affected {result.get('row_count', 0)} row(s)."
 
-    answer = chat(
+    answer = _safe_chat(
         FINAL_ANSWER_SYSTEM,
         build_final_answer_prompt(state["user_question"], summary),
         temperature=0.2,
+        node_name="final_answer",
+        trace_id=trace_id,
     )
     answer = clean_markdown(answer)
 
@@ -329,13 +534,31 @@ async def final_answer_node(state: AgentState) -> dict:
     chat_history.append({"question": state["user_question"], "answer": answer})
     chat_history = chat_history[-5:]
 
+    tracer.end_span(span.span_id, output_data={"answer_length": len(answer)}, status="completed")
+
+    # End and finalize trace
+    tracer.end_trace(
+        trace_id=trace_id,
+        final_answer=answer,
+        status="success",
+        validated_sql=state.get("validated_sql"),
+        raw_sql=state.get("raw_sql"),
+        rows_affected=result.get("row_count"),
+        intent=state.get("intent"),
+        sql_operation=operation,
+        retry_count=state.get("retry_count", 0),
+    )
+
     return {"final_answer": answer, "status": "success", "chat_history": chat_history}
 
 
 # ---------------------------------------------------------------------------
-# Node 11 — error_terminal (bounded retries exhausted, or hard rejection)
+# Node 11 — error_terminal
 # ---------------------------------------------------------------------------
 async def error_terminal(state: AgentState) -> dict:
+    trace_id = state.get("trace_id") or get_current_trace_id() or str(uuid.uuid4())
+    span = tracer.start_span("error_terminal", "node", trace_id=trace_id)
+
     error = state.get("error_message") or "Unknown error."
     logger.error("Terminating with error: %s", error)
 
@@ -360,6 +583,19 @@ async def error_terminal(state: AgentState) -> dict:
     chat_history.append({"question": state["user_question"], "answer": final_ans})
     chat_history = chat_history[-5:]
 
+    tracer.end_span(span.span_id, output_data={"error": error, "status": status}, status="completed")
+
+    tracer.end_trace(
+        trace_id=trace_id,
+        final_answer=final_ans,
+        status=status,
+        error=error,
+        validated_sql=state.get("validated_sql"),
+        raw_sql=state.get("raw_sql"),
+        intent=state.get("intent"),
+        retry_count=state.get("retry_count", 0),
+    )
+
     return {
         "final_answer": final_ans,
         "status": status,
@@ -368,7 +604,11 @@ async def error_terminal(state: AgentState) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node 12 — increment_retry (used on the loop-back edge)
+# Node 12 — increment_retry
 # ---------------------------------------------------------------------------
 async def increment_retry(state: AgentState) -> dict:
-    return {"retry_count": state.get("retry_count", 0) + 1}
+    trace_id = state.get("trace_id") or get_current_trace_id()
+    span = tracer.start_span("increment_retry", "node", trace_id=trace_id)
+    new_count = state.get("retry_count", 0) + 1
+    tracer.end_span(span.span_id, output_data={"new_retry_count": new_count}, status="completed")
+    return {"retry_count": new_count}

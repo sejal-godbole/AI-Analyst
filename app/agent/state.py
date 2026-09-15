@@ -27,7 +27,12 @@ class AgentState(TypedDict, total=False):
     # --- Intent classification (advisory only — never trusted for security) ---
     intent: str  # READ | INSERT | UPDATE | DELETE | DESTRUCTIVE | UNKNOWN
 
+    # --- Observability ---
+    trace_id: Optional[str]
+    thread_id: Optional[str]
+
     # --- SQL generation / validation ---
+    raw_sql: Optional[str]  # unstripped raw text produced by the LLM
     generated_sql: Optional[str]  # latest SQL text produced by the LLM
     validated_sql: Optional[str]  # SQL that passed validate_sql()
     validation_errors: list[str]  # errors from the most recent validation attempt

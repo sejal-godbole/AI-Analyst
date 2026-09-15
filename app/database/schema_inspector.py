@@ -42,9 +42,18 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 """
 
 
+_INTERNAL_TABLE_PREFIXES = ("observability_", "agent_audit_", "alembic_")
+_INTERNAL_TABLE_NAMES = {"agent_audit_log", "audit_log"}
+
+
+def is_internal_table(table_name: str) -> bool:
+    name = table_name.lower().strip()
+    return name.startswith(_INTERNAL_TABLE_PREFIXES) or name in _INTERNAL_TABLE_NAMES
+
+
 def inspect_schema() -> dict:
     """
-    Returns a structured schema dict:
+    Returns a structured schema dict for business/operational tables:
 
     {
       "tables": {
@@ -63,8 +72,11 @@ def inspect_schema() -> dict:
         with conn.cursor() as cur:
             cur.execute(_COLUMNS_QUERY)
             for row in cur.fetchall():
+                tname = row["table_name"]
+                if is_internal_table(tname):
+                    continue
                 t = tables.setdefault(
-                    row["table_name"],
+                    tname,
                     {"columns": {}, "nullable": {}, "primary_keys": [], "foreign_keys": []},
                 )
                 t["columns"][row["column_name"]] = row["data_type"]
@@ -72,18 +84,22 @@ def inspect_schema() -> dict:
 
             cur.execute(_PRIMARY_KEYS_QUERY)
             for row in cur.fetchall():
-                if row["table_name"] in tables:
-                    tables[row["table_name"]]["primary_keys"].append(row["column_name"])
+                tname = row["table_name"]
+                if tname in tables:
+                    tables[tname]["primary_keys"].append(row["column_name"])
 
             cur.execute(_FOREIGN_KEYS_QUERY)
             for row in cur.fetchall():
-                if row["table_name"] in tables:
-                    tables[row["table_name"]]["foreign_keys"].append(
-                        {
-                            "column": row["column_name"],
-                            "references_table": row["references_table"],
-                            "references_column": row["references_column"],
-                        }
-                    )
+                tname = row["table_name"]
+                if tname in tables:
+                    ref_table = row["references_table"]
+                    if not is_internal_table(ref_table):
+                        tables[tname]["foreign_keys"].append(
+                            {
+                                "column": row["column_name"],
+                                "references_table": ref_table,
+                                "references_column": row["references_column"],
+                            }
+                        )
 
     return {"tables": tables}
