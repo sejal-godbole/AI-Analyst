@@ -346,7 +346,16 @@ def save_trace_detail(detail: TraceDetail) -> None:
 def get_trace_by_id(trace_id: str) -> Optional[TraceDetail]:
     """Retrieve full trace details."""
     if trace_id in _LIVE_TRACES:
-        return _LIVE_TRACES[trace_id]
+        detail = _LIVE_TRACES[trace_id]
+        if not detail.evaluation:
+            try:
+                from app.evaluation.store import get_live_evaluation
+                eval_record = get_live_evaluation(trace_id)
+                if eval_record:
+                    detail.evaluation = eval_record.model_dump()
+            except Exception:
+                pass
+        return detail
 
     try:
         with get_connection() as conn:
@@ -459,6 +468,15 @@ def get_trace_by_id(trace_id: str) -> Optional[TraceDetail]:
                         for r in mcp_rows
                     ],
                 )
+
+                try:
+                    from app.evaluation.store import get_live_evaluation
+                    eval_record = get_live_evaluation(trace_id)
+                    if eval_record:
+                        detail.evaluation = eval_record.model_dump()
+                except Exception:
+                    pass
+
                 _LIVE_TRACES[trace_id] = detail
                 return detail
     except Exception as e:

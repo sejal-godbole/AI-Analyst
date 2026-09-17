@@ -59,6 +59,30 @@ def _to_response(state: dict, thread_id: str, trace_id: str) -> AnalyzeResponse:
         )
 
     status = state.get("status", "error")
+
+    # Safe live query evaluation (never breaks main pipeline)
+    try:
+        from app.evaluation.evaluator import evaluate_pipeline_result
+        from app.evaluation.store import save_live_evaluation
+        user_question = state.get("user_question") or ""
+        intent = state.get("intent") or "READ"
+        generated_sql = state.get("validated_sql") or state.get("generated_sql") or state.get("raw_sql")
+        db_result = str(state.get("execution_result") or state.get("result_validation") or "")
+        final_answer = state.get("final_answer") or state.get("error_message") or ""
+        eval_res = evaluate_pipeline_result(
+            question=user_question,
+            intent=intent,
+            generated_sql=generated_sql,
+            database_result=db_result,
+            generated_answer=final_answer,
+            trace_id=trace_id,
+            error=state.get("error_message") if status != "success" else None,
+        )
+        save_live_evaluation(eval_res)
+    except Exception as e:
+        import logging
+        logging.getLogger("ai_analyst.routes").warning("Live evaluation skipped on error: %s", e)
+
     return AnalyzeResponse(
         status=status,
         answer=state.get("final_answer"),

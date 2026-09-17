@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import PipelineGraphVisualizer from './PipelineGraphVisualizer';
 import {
   Activity,
   Zap,
@@ -31,7 +32,8 @@ import {
   Lock,
   Terminal,
   MessageSquareCode,
-  Wrench
+  Wrench,
+  Award
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -108,8 +110,10 @@ export default function ObservabilityDashboard({ currentTraceId, onClose }) {
     if (currentTraceId) {
       handleSelectTrace(currentTraceId);
       setSubTab('overview');
+    } else if (!selectedTrace && traces.length > 0) {
+      handleSelectTrace(traces[0].trace_id);
     }
-  }, [currentTraceId]);
+  }, [currentTraceId, traces.length]);
 
   const filteredTraces = traces.filter((t) => {
     if (t.status === 'running') return false;
@@ -596,78 +600,145 @@ export default function ObservabilityDashboard({ currentTraceId, onClose }) {
                   </div>
                 </div>
               )}
+
+              {/* ---------------- SECTION 4: LLM PIPELINE QUALITY EVALUATION ---------------- */}
+              <div className="obs-section">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <h3 className="section-title" style={{ margin: 0 }}>
+                    <Award size={18} style={{ color: 'var(--accent-color)' }} /> LLM Pipeline Quality Evaluation
+                  </h3>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    Deterministic & LLM-as-a-Judge Quality Metrics for this Query
+                  </span>
+                </div>
+
+                {latestTrace.evaluation ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {/* Overall Score Banner */}
+                    <div style={{ background: 'var(--bg-card)', border: '1.5px solid var(--accent-color)', borderRadius: '8px', padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-color)', textTransform: 'uppercase' }}>Overall Query Quality Score</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.2rem' }}>
+                          <span style={{ fontSize: '1.4rem', fontWeight: 900, color: 'var(--text-primary)' }}>
+                            {latestTrace.evaluation.overall_score}/10
+                          </span>
+                          <span className="status-badge" style={{ backgroundColor: latestTrace.evaluation.passed ? 'var(--success-bg)' : 'var(--danger-bg)', color: latestTrace.evaluation.passed ? 'var(--success-text)' : 'var(--danger-text)', border: `1px solid ${latestTrace.evaluation.passed ? 'var(--success-border)' : 'var(--danger-border)'}`, fontWeight: 700, fontSize: '0.7rem' }}>
+                            {latestTrace.evaluation.passed ? 'PASS (>= 8.0)' : 'FAIL (< 8.0)'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Attribution Chips */}
+                      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', fontSize: '0.68rem' }}>
+                        <span className="badge badge-intent">
+                          {latestTrace.evaluation.intent_eval?.is_ground_truth_available ? '✓ Ground Truth Aligned' : '⚡ Live Evaluation'}
+                        </span>
+                        <span className="badge badge-intent">
+                          ✓ Deterministic SQL AST
+                        </span>
+                        <span className="badge badge-intent">
+                          ✓ LLM-as-a-Judge (Gemini)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 3 LLM Evaluation Cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
+                      {/* LLM #1 Intent Card */}
+                      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Cpu size={15} style={{ color: '#3b82f6' }} />
+                            <strong style={{ fontSize: '0.82rem' }}>LLM #1: Intent (Binary)</strong>
+                          </div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: (latestTrace.evaluation.intent_eval?.score === 1.0 || latestTrace.evaluation.intent_eval?.score === 10) ? 'var(--success-text)' : 'var(--danger-text)' }}>
+                            {latestTrace.evaluation.intent_eval?.score !== null ? `${latestTrace.evaluation.intent_eval.score > 1.0 ? 1 : latestTrace.evaluation.intent_eval.score} / 1` : 'N/A'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Actual Intent:</span>
+                            <span className="badge badge-intent" style={{ fontSize: '0.65rem' }}>{latestTrace.evaluation.intent_eval?.actual_intent}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Expected:</span>
+                            <span>{latestTrace.evaluation.intent_eval?.expected_intent || 'Ground truth unavailable'}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Format Valid:</span>
+                            <strong>{latestTrace.evaluation.intent_eval?.format_compliance > 1.0 ? (latestTrace.evaluation.intent_eval?.format_compliance === 10 ? '1 / 1' : '0 / 1') : `${latestTrace.evaluation.intent_eval?.format_compliance} / 1`}</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* LLM #2 SQL Card */}
+                      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Code2 size={15} style={{ color: '#10b981' }} />
+                            <strong style={{ fontSize: '0.82rem' }}>LLM #2: SQL (Binary Checks)</strong>
+                          </div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--success-text)' }}>
+                            {latestTrace.evaluation.sql_eval?.sql_quality_score > 1.0 ? `${Math.round(latestTrace.evaluation.sql_eval?.sql_quality_score / 10 * 5)}/5 Checks` : `${Math.round(latestTrace.evaluation.sql_eval?.sql_quality_score * 5)}/5 Checks`}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Syntax & Schema:</span>
+                            <strong>{latestTrace.evaluation.sql_eval?.syntax_correctness > 1.0 ? 1 : latestTrace.evaluation.sql_eval?.syntax_correctness}/1 | {latestTrace.evaluation.sql_eval?.schema_correctness > 1.0 ? 1 : latestTrace.evaluation.sql_eval?.schema_correctness}/1</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Safety Compliance:</span>
+                            <strong>{latestTrace.evaluation.sql_eval?.safety_compliance > 1.0 ? 1 : latestTrace.evaluation.sql_eval?.safety_compliance}/1</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Semantic & Relevance:</span>
+                            <strong>{latestTrace.evaluation.sql_eval?.semantic_correctness > 1.0 ? 1 : latestTrace.evaluation.sql_eval?.semantic_correctness}/1 | {latestTrace.evaluation.sql_eval?.relevance > 1.0 ? 1 : latestTrace.evaluation.sql_eval?.relevance}/1</strong>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* LLM #3 Final Answer Card */}
+                      <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.85rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <Zap size={15} style={{ color: '#f59e0b' }} />
+                            <strong style={{ fontSize: '0.82rem' }}>LLM #3: Answer (0-10 Scale)</strong>
+                          </div>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#f59e0b' }}>
+                            {latestTrace.evaluation.final_answer_eval?.final_answer_score}/10
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.72rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Groundedness:</span>
+                            <strong style={{ color: '#10b981' }}>{latestTrace.evaluation.final_answer_eval?.groundedness}/10</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Correctness & Clarity:</span>
+                            <strong>{latestTrace.evaluation.final_answer_eval?.correctness}/10 | {latestTrace.evaluation.final_answer_eval?.clarity}/10</strong>
+                          </div>
+                          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '0.2rem' }} title={latestTrace.evaluation.final_answer_eval?.reason}>
+                            "{latestTrace.evaluation.final_answer_eval?.reason}"
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: '1rem', border: '1px dashed var(--border-color)', borderRadius: '6px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                    Evaluation telemetry processing for this query...
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>
       )}
 
-      {/* ---------------- SUB-VIEW 2: LIVE PIPELINE VISUALIZER ---------------- */}
+      {/* ---------------- SUB-VIEW 2: LIVE PIPELINE GRAPH VISUALIZER ---------------- */}
       {subTab === 'graph' && (
-        <div className="obs-content">
-          <div className="graph-banner">
-            <div>
-              <h3>LangGraph Execution Pipeline</h3>
-              <p>Visual flow of request state progression across 11 deterministic guardrailed agent nodes for this query.</p>
-            </div>
-            {latestTrace && (
-              <div className="latest-trace-pill">
-                <span>Active Trace:</span>
-                <code>{latestTrace.trace_id?.slice(0, 14)}...</code>
-                <span className={`badge badge-${latestTrace.status === 'success' ? 'success' : latestTrace.status === 'rejected' ? 'danger' : 'warning'}`}>
-                  {latestTrace.status?.toUpperCase()}
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div className="pipeline-grid">
-            {PIPELINE_NODES.map((node, index) => {
-              const Icon = node.icon;
-              const span = [...(latestTrace?.spans || [])].reverse().find((s) => s.node_name === node.id);
-              const isCompleted = span?.status === 'completed' || span?.status === 'needs_confirmation';
-              const isFailed = span?.status === 'failed';
-              const isBlocked = span?.status === 'blocked' || (node.id === 'human_confirmation' && (latestTrace?.status === 'rejected' || isHitlRejected));
-              const isRetried = span?.status === 'retried';
-              const isRunning = span?.status === 'running' && (latestTrace?.status === 'running' || latestTrace?.status === 'awaiting_confirmation');
-              const status = isRunning ? 'running' : isBlocked ? 'blocked' : isCompleted ? 'completed' : isFailed ? 'failed' : isRetried ? 'retried' : 'idle';
-              const label = isRunning ? 'RUNNING' : isBlocked ? 'REJECTED' : isCompleted ? 'COMPLETED' : isFailed ? 'FAILED' : isRetried ? 'RETRY' : 'IDLE';
-
-              return (
-                <div key={node.id} className={`pipeline-card ${status}`}>
-                  <div className="pipeline-card-top">
-                    <div className="node-icon-badge">
-                      <Icon size={16} />
-                    </div>
-                    <span className="step-num">STEP {String(index + 1).padStart(2, '0')}</span>
-                    <span className={`status-pill ${status}`}>
-                      {label}
-                    </span>
-                  </div>
-
-                  <div className="pipeline-card-body">
-                    <h4 className="node-title">{node.label}</h4>
-                    <p className="node-description">{node.desc}</p>
-                  </div>
-
-                  <div className="pipeline-card-footer">
-                    <span className="node-metric">
-                      {span?.duration_ms !== undefined ? (
-                        <>
-                          <Clock size={11} /> {span.duration_ms} ms
-                        </>
-                      ) : (
-                        <>
-                          <span className="dot-idle"></span> Ready
-                        </>
-                      )}
-                    </span>
-                    {isCompleted && <span className="node-done-check"><Check size={12} /></span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <PipelineGraphVisualizer latestTrace={latestTrace} />
       )}
 
       {/* ---------------- SUB-VIEW 3: REQUEST HISTORY & TRACES ---------------- */}

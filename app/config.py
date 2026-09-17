@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     langsmith_api_key: str = os.getenv("LANGSMITH_API_KEY", "")
     langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "ai-analyst-agent")
 
+    # Evaluation configuration
+    eval_judge_model: str = os.getenv("EVAL_JUDGE_MODEL", "gemini-3.1-pro-preview")
+    eval_judge_api_key: str = os.getenv("EVAL_JUDGE_API_KEY", "")
+    eval_judge_base_url: str = os.getenv("EVAL_JUDGE_BASE_URL", "")
+    eval_weight_intent: float = float(os.getenv("EVAL_WEIGHT_INTENT", "0.20"))
+    eval_weight_sql: float = float(os.getenv("EVAL_WEIGHT_SQL", "0.40"))
+    eval_weight_final_answer: float = float(os.getenv("EVAL_WEIGHT_FINAL_ANSWER", "0.40"))
+    eval_pass_threshold: float = float(os.getenv("EVAL_PASS_THRESHOLD", "8.0"))
+
     class Config:
         case_sensitive = False
 

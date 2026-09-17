@@ -97,6 +97,7 @@ class TraceDetail(TraceSummary):
     llm_calls: list[LLMCallRecord] = Field(default_factory=list)
     guardrail_records: list[GuardrailRecord] = Field(default_factory=list)
     mcp_calls: list[MCPCallRecord] = Field(default_factory=list)
+    evaluation: Optional[dict[str, Any]] = None
 
 
 class DashboardMetrics(BaseModel):

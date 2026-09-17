@@ -26,9 +26,11 @@ import {
   ChevronDown,
   ChevronRight,
   ShieldCheck,
-  DollarSign
+  DollarSign,
+  Award
 } from 'lucide-react';
 import ObservabilityDashboard from './components/ObservabilityDashboard';
+import EvaluationDashboard from './components/EvaluationDashboard';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -400,6 +402,13 @@ function App() {
                 Audit Logs
               </button>
               <button 
+                className={`tab-button ${activeTab === 'evaluation' ? 'active' : ''}`}
+                onClick={() => setActiveTab('evaluation')}
+              >
+                <Award size={14} style={{ marginRight: '0.35rem', verticalAlign: 'middle' }} />
+                Evaluation
+              </button>
+              <button 
                 className="tab-button"
                 onClick={() => setShowObservabilityModal(true)}
                 style={{ color: 'var(--accent-color)', borderColor: 'rgba(139, 92, 246, 0.25)' }}
@@ -692,6 +701,11 @@ function App() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Tab 4: Evaluation Dashboard */}
+          {activeTab === 'evaluation' && (
+            <EvaluationDashboard />
           )}
         </section>
 

@@ -134,10 +134,12 @@ def test_tracer_lifecycle():
 @pytest.mark.asyncio
 async def test_observability_endpoints():
     # Insert a sample trace to verify endpoints
-    tracer = Tracer()
-    sample_id = "test-endpoint-trace"
+    import uuid
+    from app.observability.tracer import tracer
+    from app.observability.store import save_trace_detail
+    sample_id = f"test-endpoint-trace-{uuid.uuid4()}"
     tracer.start_trace(sample_id, "Sample test question")
-    tracer.end_trace(
+    ended = tracer.end_trace(
         trace_id=sample_id,
         final_answer="Sample test answer",
         status="success",
@@ -145,6 +147,8 @@ async def test_observability_endpoints():
         intent="READ",
         sql_operation="SELECT",
     )
+    if ended:
+        save_trace_detail(ended)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
