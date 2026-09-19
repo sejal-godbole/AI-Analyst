@@ -550,7 +550,9 @@ function App() {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-                {Object.entries(schemaData.tables || {}).map(([tableName, tableInfo]) => (
+                {Object.entries(schemaData.tables || {})
+                  .filter(([tableName]) => !tableName.startsWith('evaluation_') && !tableName.startsWith('observability_') && !tableName.startsWith('agent_audit_'))
+                  .map(([tableName, tableInfo]) => (
                   <div key={tableName} className="neo-box" style={{ padding: '1rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem', marginBottom: '0.5rem' }}>
                       <Database size={16} style={{ color: 'var(--accent-color)' }} />

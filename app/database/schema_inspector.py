@@ -42,8 +42,8 @@ WHERE tc.constraint_type = 'FOREIGN KEY'
 """
 
 
-_INTERNAL_TABLE_PREFIXES = ("observability_", "agent_audit_", "alembic_")
-_INTERNAL_TABLE_NAMES = {"agent_audit_log", "audit_log"}
+_INTERNAL_TABLE_PREFIXES = ("observability_", "agent_audit_", "alembic_", "evaluation_")
+_INTERNAL_TABLE_NAMES = {"agent_audit_log", "audit_log", "evaluation_results", "evaluation_runs"}
 
 
 def is_internal_table(table_name: str) -> bool:
