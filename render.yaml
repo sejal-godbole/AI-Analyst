@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ai-analyst-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-analyst-db
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_TRACING
+        value: "false"
+
+databases:
+  - name: ai-analyst-db
+    plan: free
+    databaseName: ai_analyst
+    user: analyst_user
