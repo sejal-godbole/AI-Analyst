@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.evaluation_routes import eval_router
 from app.api.observability_routes import obs_router
 from app.api.routes import router
+from app.database.init_db import init_sample_db
 from app.evaluation.store import init_evaluation_db
 from app.observability.store import init_observability_db
 
@@ -19,9 +20,10 @@ logger = logging.getLogger("ai_analyst.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize observability and evaluation tables
+    # Startup: Initialize sample database tables, observability, and evaluation tables
     logger.info("Initializing database, observability, and evaluation tables...")
     try:
+        init_sample_db()
         init_observability_db()
         init_evaluation_db()
     except Exception as e:

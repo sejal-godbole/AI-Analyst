@@ -9,6 +9,8 @@ services:
         fromDatabase:
           name: ai-analyst-db
           property: connectionString
+      - key: LLM_API_KEY
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: LANGSMITH_API_KEY

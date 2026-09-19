@@ -18,17 +18,40 @@ from pydantic_settings import BaseSettings, NoDecode
 load_dotenv()
 
 
+def _resolve_llm_settings() -> tuple[str, str, str]:
+    api_key = (
+        os.getenv("LLM_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or ""
+    )
+    base_url = os.getenv("LLM_BASE_URL", "").strip()
+    model = os.getenv("LLM_MODEL", "").strip()
+
+    if not base_url:
+        if api_key.startswith("sk-") and not os.getenv("LLM_API_KEY"):
+            base_url = "https://api.openai.com/v1"
+            model = model or "gpt-4o-mini"
+        else:
+            base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+            model = model or "gemini-2.5-flash"
+    elif not model:
+        model = "gemini-2.5-flash"
+
+    return api_key, base_url, model
+
+
+_api_key, _base_url, _model = _resolve_llm_settings()
+
+
 class Settings(BaseSettings):
     # Database — read only by app/database/* and app/mcp/server.py
     database_url: str = os.getenv("DATABASE_URL", "")
 
-    # LLM — defaults target Gemini's OpenAI-compatibility endpoint, so the
-    # same `openai` SDK client works unchanged against Google's API.
-    llm_api_key: str = os.getenv("LLM_API_KEY", "")
-    llm_base_url: str = os.getenv(
-        "LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
-    )
-    llm_model: str = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    # LLM — defaults target Gemini's OpenAI-compatibility endpoint or OpenAI
+    llm_api_key: str = _api_key
+    llm_base_url: str = _base_url
+    llm_model: str = _model
 
     # Agent behavior
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
@@ -67,9 +90,9 @@ class Settings(BaseSettings):
     langsmith_project: str = os.getenv("LANGSMITH_PROJECT", "ai-analyst-agent")
 
     # Evaluation configuration
-    eval_judge_model: str = os.getenv("EVAL_JUDGE_MODEL", "gemini-3.1-pro-preview")
-    eval_judge_api_key: str = os.getenv("EVAL_JUDGE_API_KEY", "")
-    eval_judge_base_url: str = os.getenv("EVAL_JUDGE_BASE_URL", "")
+    eval_judge_model: str = os.getenv("EVAL_JUDGE_MODEL", "gemini-2.5-flash" if "gemini" in _model else _model)
+    eval_judge_api_key: str = os.getenv("EVAL_JUDGE_API_KEY", _api_key)
+    eval_judge_base_url: str = os.getenv("EVAL_JUDGE_BASE_URL", _base_url)
     eval_weight_intent: float = float(os.getenv("EVAL_WEIGHT_INTENT", "0.20"))
     eval_weight_sql: float = float(os.getenv("EVAL_WEIGHT_SQL", "0.40"))
     eval_weight_final_answer: float = float(os.getenv("EVAL_WEIGHT_FINAL_ANSWER", "0.40"))
