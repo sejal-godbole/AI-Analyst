@@ -238,10 +238,11 @@ function App() {
       }
     } catch (err) {
       console.error(err);
+      const serverMsg = err.response?.data?.detail || err.response?.data?.error || err.response?.data?.answer || (err.response?.status === 403 ? 'Request was blocked by security guardrails.' : err.message);
       const errorMsg = {
         id: `err-${Date.now()}`,
         sender: 'agent',
-        text: 'The server encountered an error processing your query. Check if the database and LLM service are online.',
+        text: serverMsg || 'The server encountered an error processing your query. Check if the database and LLM service are online.',
         timestamp: new Date().toLocaleTimeString(),
         status: 'error'
       };

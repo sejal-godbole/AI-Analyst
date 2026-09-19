@@ -16,31 +16,43 @@ router = APIRouter()
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
-    # --- Resuming a paused (awaiting-confirmation) workflow ---
-    if request.thread_id and request.confirm is not None:
-        trace_id = request.trace_id or str(uuid.uuid4())
-        set_current_trace_id(trace_id)
-        config = {"configurable": {"thread_id": request.thread_id}}
-        final_state = await compiled_graph.ainvoke(Command(resume=request.confirm), config)
-        return _to_response(final_state, request.thread_id, trace_id)
-
-    # --- Fresh request ---
     thread_id = request.thread_id or str(uuid.uuid4())
     trace_id = request.trace_id or str(uuid.uuid4())
-    set_current_trace_id(trace_id)
 
-    # Start root trace
-    tracer.start_trace(trace_id=trace_id, user_question=request.question, thread_id=thread_id)
+    try:
+        # --- Resuming a paused (awaiting-confirmation) workflow ---
+        if request.thread_id and request.confirm is not None:
+            set_current_trace_id(trace_id)
+            config = {"configurable": {"thread_id": request.thread_id}}
+            final_state = await compiled_graph.ainvoke(Command(resume=request.confirm), config)
+            return _to_response(final_state, request.thread_id, trace_id)
 
-    config = {"configurable": {"thread_id": thread_id}}
-    initial_state = {
-        "user_question": request.question,
-        "trace_id": trace_id,
-        "thread_id": thread_id,
-    }
+        # --- Fresh request ---
+        set_current_trace_id(trace_id)
 
-    final_state = await compiled_graph.ainvoke(initial_state, config)
-    return _to_response(final_state, thread_id, trace_id)
+        # Start root trace
+        tracer.start_trace(trace_id=trace_id, user_question=request.question, thread_id=thread_id)
+
+        config = {"configurable": {"thread_id": thread_id}}
+        initial_state = {
+            "user_question": request.question,
+            "trace_id": trace_id,
+            "thread_id": thread_id,
+        }
+
+        final_state = await compiled_graph.ainvoke(initial_state, config)
+        return _to_response(final_state, thread_id, trace_id)
+    except Exception as e:
+        import logging
+        logging.getLogger("ai_analyst.routes").exception("Analyze endpoint exception: %s", e)
+        return AnalyzeResponse(
+            status="error",
+            answer=f"Error: {str(e)}",
+            error=str(e),
+            thread_id=thread_id,
+            trace_id=trace_id,
+            requires_confirmation=False,
+        )
 
 
 def _to_response(state: dict, thread_id: str, trace_id: str) -> AnalyzeResponse:
