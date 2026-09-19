@@ -97,7 +97,9 @@ def _to_response(state: dict, thread_id: str, trace_id: str) -> AnalyzeResponse:
 
 @router.get("/schema")
 async def get_schema() -> dict:
+    from app.database.init_db import init_sample_db
     from app.database.schema_inspector import inspect_schema
+    init_sample_db()
     return inspect_schema()
 
 
