@@ -30,7 +30,11 @@ def _server_params() -> StdioServerParameters:
     command = settings.mcp_server_command
     if command == "python":
         command = sys.executable
-    return StdioServerParameters(command=command, args=args, env=os.environ.copy())
+    env = os.environ.copy()
+    cwd = os.getcwd()
+    pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{cwd}:{pythonpath}" if pythonpath else cwd
+    return StdioServerParameters(command=command, args=args, env=env)
 
 
 @asynccontextmanager
