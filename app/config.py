@@ -34,9 +34,9 @@ def _resolve_llm_settings() -> tuple[str, str, str]:
             model = model or "gpt-4o-mini"
         else:
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-            model = model or "gemini-2.5-flash"
+            model = model or "gemini-1.5-flash"
     elif not model:
-        model = "gemini-2.5-flash"
+        model = "gemini-1.5-flash"
 
     return api_key, base_url, model
 
